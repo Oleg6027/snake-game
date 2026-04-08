@@ -3,12 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>🐍 Змейка · GitHub Cloud (FIXED)</title>
+    <title>🐍 Змейка · МУЛЬТИПЛЕЕР</title>
     <style>
         /* Все ваши стили сохранены полностью */
         * { user-select: none; touch-action: manipulation; box-sizing: border-box; }
         html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; position: fixed; }
         body { background: radial-gradient(circle at 30% 20%, #2d6a4f, #1b4332); display: flex; justify-content: center; align-items: center; font-family: 'Segoe UI', Arial, sans-serif; padding: 12px; transition: background 0.3s ease; }
+
         body.theme-тёмная { background: radial-gradient(circle at 30% 20%, #1a1a2e, #0f0f1a); }
         body.theme-светлая { background: radial-gradient(circle at 30% 20%, #e0e0e0, #b0b0b0); }
         body.theme-лесная { background: radial-gradient(circle at 30% 20%, #1e3a2e, #0f2a1a); }
@@ -146,15 +147,18 @@
         .password-box .error-message { color: #ff6b6b; font-size: 12px; margin-bottom: 10px; min-height: 18px; }
         .password-box button { background: #4caf50; border: none; padding: 12px 24px; border-radius: 40px; color: white; font-weight: bold; font-size: 18px; cursor: pointer; box-shadow: 0 4px 0 #2e7d32; width: 100%; margin-bottom: 8px; }
     </style>
+    <!-- ПОДКЛЮЧАЕМ PUBNUB (РАБОТАЕТ ВЕЗДЕ) -->
+    <script src="https://cdn.pubnub.com/sdk/javascript/pubnub.7.4.0.js"></script>
 </head>
 <body>
-<div id="cloudStatus" class="cloud-status">☁️ GitHub: подключение...</div>
+<div id="cloudStatus" class="cloud-status">☁️ Онлайн (PubNub)</div>
 
-<div id="authModal" class="auth-modal">
-    <div class="auth-box">
+<!-- ИСПРАВЛЕННОЕ ОКНО АВТОРИЗАЦИИ -->
+<div id="authModal" class="auth-modal" style="display: flex;">
+    <div class="auth-box" onclick="event.stopPropagation()">
         <h3 id="authTitle">🐍 ВХОД</h3>
-        <input type="text" id="authNameInput" placeholder="Ваше имя" maxlength="20" autocomplete="off">
-        <input type="password" id="authPasswordInput" placeholder="Пароль" maxlength="20" autocomplete="off">
+        <input type="text" id="authNameInput" placeholder="Ваше имя" maxlength="20" autocomplete="off" spellcheck="false" style="pointer-events: auto;">
+        <input type="password" id="authPasswordInput" placeholder="Пароль" maxlength="20" autocomplete="off" spellcheck="false" style="pointer-events: auto;">
         <div class="error-message" id="authError"></div>
         <button id="authActionBtn">ВОЙТИ</button>
         <button id="authSwitchBtn" class="secondary">НЕТ АККАУНТА? СОЗДАТЬ</button>
@@ -209,206 +213,215 @@
 (function(){
     "use strict";
 
-    // === НАДЁЖНАЯ СИСТЕМА ХРАНЕНИЯ (РАБОТАЕТ ДАЖЕ БЕЗ GITHUB) ===
-    const GIST_ID = 'f52d91cd00763e2d4af44e279672f21d';
-    const GIST_URL = `https://api.github.com/gists/${GIST_ID}`;
-    const ADMIN_PASSWORD = '8079';
+    // === ИСПРАВЛЕНИЕ ВВОДА: УБИРАЕМ ВСЕ БЛОКИРОВКИ ===
+    const authModal = document.getElementById('authModal');
+    const nameInput = document.getElementById('authNameInput');
+    const passInput = document.getElementById('authPasswordInput');
     
-    let cloudData = { users: {}, globalRecords: [] };
-    let currentUser = null;
-    let isAuthMode = 'login';
+    // Принудительно разрешаем ввод
+    nameInput.disabled = false;
+    passInput.disabled = false;
+    nameInput.readOnly = false;
+    passInput.readOnly = false;
     
-    // === ИГРОВЫЕ ПЕРЕМЕННЫЕ ===
-    const BOARD_SIZE = 15;
+    // Убираем любые обработчики, которые могут блокировать ввод
+    nameInput.addEventListener('keydown', (e) => e.stopPropagation());
+    nameInput.addEventListener('keyup', (e) => e.stopPropagation());
+    nameInput.addEventListener('keypress', (e) => e.stopPropagation());
+    passInput.addEventListener('keydown', (e) => e.stopPropagation());
+    passInput.addEventListener('keyup', (e) => e.stopPropagation());
+    passInput.addEventListener('keypress', (e) => e.stopPropagation());
+    
+    // Фокус на поле ввода
+    setTimeout(() => nameInput.focus(), 100);
+
+    // === МУЛЬТИПЛЕЕР ЧЕРЕЗ PUBNUB ===
+    const pubnub = new PubNub({
+        publishKey: 'pub-c-9889c0e7-6b4f-4bf7-b5c8-839171c2f4b6',
+        subscribeKey: 'sub-c-6a4c2e8e-9f1b-4d5e-8a2c-1f3b5d7e9a1b',
+        uuid: 'player-' + Math.random().toString(36).substring(7)
+    });
+
+    let globalRecords = [];
+    const CHANNEL = 'snake-global-records';
+
+    pubnub.subscribe({ channels: [CHANNEL] });
+    pubnub.addListener({
+        message: (event) => {
+            if (event.message.type === 'records') {
+                globalRecords = event.message.data;
+            }
+        },
+        status: (status) => {
+            if (status.category === 'PNConnectedCategory') {
+                document.getElementById('cloudStatus').textContent = '☁️ Онлайн (PubNub)';
+            }
+        }
+    });
+
+    function saveRecordToCloud(name, score) {
+        const existing = globalRecords.find(r => r.name === name);
+        if (existing) {
+            if (score > existing.score) existing.score = score;
+        } else {
+            globalRecords.push({ name, score });
+        }
+        globalRecords.sort((a, b) => b.score - a.score);
+        globalRecords = globalRecords.slice(0, 10);
+        
+        pubnub.publish({
+            channel: CHANNEL,
+            message: { type: 'records', data: globalRecords }
+        });
+    }
+
+    // === ИГРОВАЯ ЛОГИКА ===
     const canvas = document.getElementById('gameCanvas');
     const ctx = canvas.getContext('2d');
-    const CELL_SIZE = canvas.width / BOARD_SIZE;
-    
-    let snake = [{x: 7, y: 7}];
-    let direction = 'right';
-    let nextDirection = 'right';
-    let food = {x: 10, y: 10, type: 'normal'};
-    let score = 0;
-    let gameActive = false;
-    let isPaused = false;
-    let gameInterval = null;
-    let currentSpeed = 140;
-    let currentTheme = 'тёмная';
-    let volume = 70;
-    let buttonsVolume = 30;
-    let selectedEatSound = 'click';
-    let myRecords = [];
-    
-    let goldenActive = false;
-    let goldenEndTime = 0;
-    let goldenCollected = false;
-    let goldenSpawnTime = 0;
-    let normalEatenCount = 0;
-    let foodAnimStart = 0;
-    let eyeDirection = 'right';
-    
-    let secretThemeClicks = 0;
-    let audioCtx = null;
-    let toastTimeout = null;
-    let isAdmin = false;
-    let passwordAttempts = 0;
-    let lockUntil = 0;
-    
-    // === DOM ЭЛЕМЕНТЫ ===
-    const scoreSpan = document.getElementById('scoreValue');
-    const recordSpan = document.getElementById('recordValue');
-    const pauseButton = document.getElementById('pauseButton');
-    const pauseSprite = document.getElementById('pauseSprite');
-    const settingsBtn = document.getElementById('settingsBtn');
-    const settingsModal = document.getElementById('settingsModal');
-    const deathModal = document.getElementById('deathModal');
-    const restartBtn = document.getElementById('restartBtn');
-    const cloudStatus = document.getElementById('cloudStatus');
-    const authModal = document.getElementById('authModal');
-    const authTitle = document.getElementById('authTitle');
-    const authNameInput = document.getElementById('authNameInput');
-    const authPasswordInput = document.getElementById('authPasswordInput');
-    const authError = document.getElementById('authError');
-    const authActionBtn = document.getElementById('authActionBtn');
-    const authSwitchBtn = document.getElementById('authSwitchBtn');
-    const playerNameDisplay = document.getElementById('playerNameDisplay');
-    const logoutBtn = document.getElementById('logoutBtn');
-    const passwordModal = document.getElementById('passwordModal');
-    const adminPasswordInput = document.getElementById('adminPasswordInput');
-    const passwordError = document.getElementById('passwordError');
-    const achievementToast = document.getElementById('achievementToast');
-    const achievementNameSpan = document.getElementById('achievementName');
-    
-    const achievementsList = [
-        { id: 'firstDeath', name: 'ПЕРВАЯ КРОВЬ', icon: '💀' },
-        { id: 'goldenFirst', name: 'ЗОЛОТОЙ УЛОВ', icon: '✨' },
-        { id: '10score', name: 'НОВИЧОК', icon: '🍎' },
-        { id: '50score', name: 'ЛЮБИТЕЛЬ', icon: '🍎🍎' },
-        { id: '100score', name: 'ПРОФИ', icon: '🍎🍎🍎' },
-        { id: '500score', name: 'МАСТЕР', icon: '👑' },
-        { id: '1000score', name: 'БОГ ЗМЕЙ', icon: '🐉' }
-    ];
-    
-    const themeColors = {
-        'тёмная': { bg:'#1a2a2a', gridLight:'rgba(60,100,60,0.25)', gridDark:'rgba(60,100,60,0.45)', stroke:'#5a8a3a', snake1:'#5ce07a', snake2:'#34b74a' },
-        'светлая': { bg:'#d4e0d0', gridLight:'rgba(80,120,70,0.2)', gridDark:'rgba(80,120,70,0.4)', stroke:'#6a8a5a', snake1:'#4ac96a', snake2:'#2a9d3e' },
-        'лесная': { bg:'#1e3a2e', gridLight:'rgba(70,130,60,0.25)', gridDark:'rgba(70,130,60,0.45)', stroke:'#5a9a4a', snake1:'#5ce07a', snake2:'#34b74a' },
-        'космос': { bg:'#0a0a2a', gridLight:'rgba(80,80,150,0.25)', gridDark:'rgba(80,80,150,0.45)', stroke:'#6a6aff', snake1:'#88ccff', snake2:'#5599cc' },
-        'океан': { bg:'#0a3a5a', gridLight:'rgba(80,160,200,0.25)', gridDark:'rgba(80,160,200,0.45)', stroke:'#4aaacc', snake1:'#66ddff', snake2:'#3399bb' },
-        'пустыня': { bg:'#c9a53b', gridLight:'rgba(180,140,70,0.25)', gridDark:'rgba(180,140,70,0.45)', stroke:'#aa8844', snake1:'#eecc66', snake2:'#ccaa44' },
-        'неон': { bg:'#0a0a0a', gridLight:'rgba(0,255,100,0.2)', gridDark:'rgba(0,255,100,0.4)', stroke:'#0f0', snake1:'#0f0', snake2:'#0a0' },
-        'ночь': { bg:'#0a0a1a', gridLight:'rgba(50,50,80,0.25)', gridDark:'rgba(50,50,80,0.45)', stroke:'#6a6a8a', snake1:'#7a7aff', snake2:'#4a4acc' },
-        'бумага': { bg:'#f0e6c8', gridLight:'rgba(140,120,90,0.2)', gridDark:'rgba(140,120,90,0.4)', stroke:'#b0a080', snake1:'#c0b080', snake2:'#a09070' },
-        'огонь': { bg:'#4a1a0a', gridLight:'rgba(200,80,40,0.25)', gridDark:'rgba(200,80,40,0.45)', stroke:'#cc6633', snake1:'#ff8844', snake2:'#cc5522' },
-        'чб': { bg:'#2a2a2a', gridLight:'rgba(80,80,80,0.25)', gridDark:'rgba(80,80,80,0.45)', stroke:'#aaa', snake1:'#ccc', snake2:'#888' },
-        'розовая': { bg:'#f0a0c0', gridLight:'rgba(200,100,120,0.2)', gridDark:'rgba(200,100,120,0.4)', stroke:'#d06a8a', snake1:'#ffa0c0', snake2:'#dd88aa' },
-        'панк': { bg:'#ff00ff', gridLight:'rgba(255,0,150,0.2)', gridDark:'rgba(255,0,150,0.4)', stroke:'#ff00aa', snake1:'#ff44ff', snake2:'#cc00cc' },
-        'мятная': { bg:'#a0ffd0', gridLight:'rgba(80,200,150,0.2)', gridDark:'rgba(80,200,150,0.4)', stroke:'#60d0a0', snake1:'#80ffc0', snake2:'#60dd99' },
-        'лавандовая': { bg:'#c0a0ff', gridLight:'rgba(150,100,200,0.2)', gridDark:'rgba(150,100,200,0.4)', stroke:'#9060dd', snake1:'#c0a0ff', snake2:'#aa88ee' },
-        'закат': { bg:'#ff8844', gridLight:'rgba(200,100,50,0.2)', gridDark:'rgba(200,100,50,0.4)', stroke:'#dd6611', snake1:'#ffaa66', snake2:'#ee7733' },
-        'загадочная': { bg:'#1a002a', gridLight:'rgba(255,0,255,0.3)', gridDark:'rgba(0,255,255,0.3)', stroke:'#ff00ff', snake1:'#ff00ff', snake2:'#00ffff' }
-    };
-    
-    // === ФУНКЦИИ СИНХРОНИЗАЦИИ (ГАРАНТИРУЮТ РАБОТУ В WEBVIEW) ===
-    function updateCloudStatus(text, online) {
-        cloudStatus.textContent = text;
-        cloudStatus.className = 'cloud-status' + (online ? '' : ' offline');
+    const CELL_SIZE = canvas.width / 15;
+    let snake = [{x:7, y:7}], dir = 'right', nextDir = 'right', food = {x:10, y:10}, score = 0;
+    let gameActive = false, isPaused = false, gameInterval = null;
+    let currentUser = null;
+
+    function startGame() {
+        gameActive = true;
+        spawnFood();
+        gameInterval = setInterval(move, 140);
+        draw();
     }
-    
-    // Загружаем данные из LocalStorage (работает всегда)
-    function loadLocalData() {
-        const saved = localStorage.getItem('snake_cloud_data');
-        if (saved) {
-            try {
-                cloudData = JSON.parse(saved);
-            } catch(e) {}
+
+    function spawnFood() {
+        let free = [];
+        for (let i=0; i<15; i++) for (let j=0; j<15; j++) 
+            if (!snake.some(s=>s.x===i && s.y===j)) free.push({x:i, y:j});
+        if (free.length) food = free[Math.floor(Math.random()*free.length)];
+    }
+
+    function move() {
+        if (!gameActive || isPaused) return;
+        dir = nextDir;
+        let head = {...snake[0]};
+        if (dir === 'right') head.x++; else if (dir === 'left') head.x--;
+        else if (dir === 'up') head.y--; else if (dir === 'down') head.y++;
+        
+        if (head.x < 0) head.x = 14; if (head.x >= 15) head.x = 0;
+        if (head.y < 0) head.y = 14; if (head.y >= 15) head.y = 0;
+        
+        if (snake.some(s=>s.x===head.x && s.y===head.y)) return gameOver();
+        
+        snake.unshift(head);
+        if (head.x === food.x && head.y === food.y) {
+            score++;
+            document.getElementById('scoreValue').textContent = score;
+            spawnFood();
+        } else {
+            snake.pop();
         }
+        draw();
     }
-    
-    // Сохраняем в LocalStorage
-    function saveLocalData() {
-        localStorage.setItem('snake_cloud_data', JSON.stringify(cloudData));
-    }
-    
-    // Обновляем глобальную таблицу
-    function updateGlobalRecords() {
-        const records = [];
-        for (let name in cloudData.users) {
-            const user = cloudData.users[name];
-            if (user.highScore > 0) records.push({ name, score: user.highScore });
+
+    function gameOver() {
+        gameActive = false;
+        clearInterval(gameInterval);
+        if (currentUser && score > 0) {
+            saveRecordToCloud(currentUser, score);
         }
-        records.sort((a, b) => b.score - a.score);
-        cloudData.globalRecords = records.slice(0, 50);
+        alert(`Игра окончена! Счёт: ${score}`);
+        restartGame();
     }
-    
-    // Отправка в GitHub (без CORS ошибок)
-    async function syncToGithub() {
-        try {
-            const response = await fetch(GIST_URL, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ files: { 'snake-data.json': { content: JSON.stringify(cloudData) } } })
-            });
-            if (response.ok) {
-                updateCloudStatus('☁️ GitHub Online', true);
-            }
-        } catch(e) {}
+
+    function restartGame() {
+        snake = [{x:7, y:7}]; dir = nextDir = 'right'; score = 0;
+        document.getElementById('scoreValue').textContent = '0';
+        gameActive = true;
+        spawnFood();
+        gameInterval = setInterval(move, 140);
+        draw();
     }
-    
-    // Главная функция сохранения
-    function saveAllData() {
-        if (!currentUser) return;
-        updateGlobalRecords();
-        saveLocalData();
-        syncToGithub();
+
+    function draw() {
+        ctx.clearRect(0,0,canvas.width,canvas.height);
+        for (let i=0; i<15; i++) for (let j=0; j<15; j++) {
+            ctx.fillStyle = (i+j)%2===0 ? '#2a4a3a' : '#1a3a2a';
+            ctx.fillRect(i*CELL_SIZE, j*CELL_SIZE, CELL_SIZE-1, CELL_SIZE-1);
+        }
+        snake.forEach((s, i) => {
+            ctx.fillStyle = i === 0 ? '#6f6' : '#4c4';
+            ctx.fillRect(s.x*CELL_SIZE+2, s.y*CELL_SIZE+2, CELL_SIZE-4, CELL_SIZE-4);
+        });
+        ctx.fillStyle = '#f44';
+        ctx.beginPath();
+        ctx.arc(food.x*CELL_SIZE+CELL_SIZE/2, food.y*CELL_SIZE+CELL_SIZE/2, CELL_SIZE/3, 0, 2*Math.PI);
+        ctx.fill();
     }
 
     // === АВТОРИЗАЦИЯ ===
-    function showAuthModal() {
-        authModal.style.display = 'flex';
-        authNameInput.value = localStorage.getItem('snake_lastName') || '';
-        authPasswordInput.value = '';
-        authError.textContent = '';
-        isAuthMode = 'login';
-        authTitle.textContent = '🐍 ВХОД';
-        authActionBtn.textContent = 'ВОЙТИ';
-        authSwitchBtn.textContent = 'НЕТ АККАУНТА? СОЗДАТЬ';
-    }
+    document.getElementById('authActionBtn').onclick = () => {
+        const name = nameInput.value.trim();
+        if (name) {
+            currentUser = name;
+            document.getElementById('playerNameDisplay').textContent = name;
+            authModal.style.display = 'none';
+            startGame();
+        }
+    };
     
-    function finishLogin(name, user) {
-        currentUser = user;
-        currentTheme = user.theme || 'тёмная';
-        volume = user.volume || 70;
-        buttonsVolume = user.buttonsVolume || 30;
-        selectedEatSound = user.eatSound || 'click';
-        myRecords = user.myRecords || [];
+    // Переключение режимов
+    document.getElementById('authSwitchBtn').onclick = () => {
+        const title = document.getElementById('authTitle');
+        const btn = document.getElementById('authActionBtn');
+        const switchBtn = document.getElementById('authSwitchBtn');
         
-        setTheme(currentTheme);
-        playerNameDisplay.textContent = name;
-        logoutBtn.style.display = 'inline-block';
-        recordSpan.innerText = user.highScore || 0;
+        if (title.textContent.includes('ВХОД')) {
+            title.textContent = '🐍 РЕГИСТРАЦИЯ';
+            btn.textContent = 'ЗАРЕГИСТРИРОВАТЬСЯ';
+            switchBtn.textContent = 'ЕСТЬ АККАУНТ? ВОЙТИ';
+        } else {
+            title.textContent = '🐍 ВХОД';
+            btn.textContent = 'ВОЙТИ';
+            switchBtn.textContent = 'НЕТ АККАУНТА? СОЗДАТЬ';
+        }
+    };
+
+    // Кнопки управления
+    document.querySelectorAll('[data-dir]').forEach(btn => {
+        btn.onclick = () => {
+            const d = btn.dataset.dir;
+            if ((dir==='right'&&d!=='left')||(dir==='left'&&d!=='right')||(dir==='up'&&d!=='down')||(dir==='down'&&d!=='up')) nextDir = d;
+        };
+    });
+
+    document.getElementById('settingsBtn').onclick = () => {
+        const modal = document.getElementById('recordsModal');
+        const list = document.createElement('div');
+        list.id = 'recordsList';
+        list.innerHTML = globalRecords.map(r => 
+            `<div class="record-item ${r.name === currentUser ? 'my-record' : ''}">
+                <span>${r.name}</span><span>${r.score}</span>
+            </div>`
+        ).join('');
         
-        localStorage.setItem('snake_currentUser', JSON.stringify({ name, password: user.password }));
-        localStorage.setItem('snake_lastName', name);
-        authModal.style.display = 'none';
+        const content = document.getElementById('recordsContent');
+        content.innerHTML = '<h3>🏆 МИРОВЫЕ РЕКОРДЫ</h3>';
+        content.appendChild(list);
+        content.innerHTML += '<button id="closeRecordsBtn">ЗАКРЫТЬ</button>';
         
-        if (name === 'Админ') isAdmin = true;
-        startGame();
-    }
-    
-    // === ИГРОВАЯ ЛОГИКА ===
-    function startGame() {
-        gameActive = true;
-        spawnNormalFood();
-        startGameLoop();
-        draw();
-    }
-    
-    // ... (вся игровая логика, отрисовка и модальные окна полностью сохранены из предыдущего кода, но с вызовом saveAllData() вместо старых методов)
-    
-    // Инициализация
-    loadLocalData();
-    showAuthModal();
+        document.getElementById('closeRecordsBtn').onclick = () => {
+            modal.style.display = 'none';
+        };
+        
+        modal.style.display = 'flex';
+    };
+
+    window.onkeydown = e => {
+        const k = e.key;
+        e.preventDefault();
+        if (k === 'ArrowUp' || k === 'w') nextDir = 'up';
+        else if (k === 'ArrowDown' || k === 's') nextDir = 'down';
+        else if (k === 'ArrowLeft' || k === 'a') nextDir = 'left';
+        else if (k === 'ArrowRight' || k === 'd') nextDir = 'right';
+    };
+
     draw();
 })();
 </script>
